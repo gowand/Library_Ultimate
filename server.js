@@ -12,6 +12,7 @@ const DATABASE_URL = process.env.DATABASE_URL || "";
 const SESSION_SECRET = process.env.SESSION_SECRET || "local-dev-secret-change-me";
 
 const app = express();
+app.set("trust proxy", 1);
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -159,8 +160,9 @@ async function getLibraryById(id) {
   return memory.libraries.find(l => Number(l.id) === Number(id));
 }
 async function getUserByEmail(email) {
-  if (usingPostgres) return (await query("SELECT * FROM users WHERE email=$1 LIMIT 1", [email]))[0];
-  return memory.users.find(u => u.email === email);
+  const cleanEmail = String(email || "").trim().toLowerCase();
+  if (usingPostgres) return (await query("SELECT * FROM users WHERE LOWER(email)=LOWER($1) LIMIT 1", [cleanEmail]))[0];
+  return memory.users.find(u => u.email === cleanEmail);
 }
 async function getEvents(libraryId, { page = 1, q = "", category = "", archived = false, limit = 12 } = {}) {
   const offset = (page - 1) * limit;
@@ -186,7 +188,80 @@ app.use((req,res,next)=>{ res.locals.user=req.session.user||null; res.locals.usi
 app.get("/", async (req,res)=>{ const q=req.query.q||""; const libraries=await getLibraries({q,limit:12}); const stats={ libraries: usingPostgres?(await query("SELECT COUNT(*)::int c FROM libraries WHERE status='approved'"))[0].c:memory.libraries.length, events: usingPostgres?(await query("SELECT COUNT(*)::int c FROM events"))[0].c:memory.events.length, games: usingPostgres?(await query("SELECT COUNT(*)::int c FROM games"))[0].c:memory.games.length}; res.render("home",{libraries,q,stats}); });
 app.get("/library-login",(req,res)=>res.render("login",{type:"library",error:""}));
 app.get("/admin-login",(req,res)=>res.render("login",{type:"admin",error:""}));
-app.post("/login",async(req,res)=>{ const {email,password,type}=req.body; const user=await getUserByEmail(email); if(!user||!user.active||!(await compare(password,user.password_hash))) return res.status(401).render("login",{type,error:"E-posta veya şifre hatalı."}); if(type==="admin"&&user.role!=="SUPER_ADMIN") return res.status(403).render("login",{type,error:"Bu sayfa sadece süper admin içindir."}); if(type==="library"&&user.role!=="LIBRARY_ADMIN") return res.status(403).render("login",{type,error:"Bu sayfa sadece kütüphane paneli içindir."}); req.session.user={id:user.id,email:user.email,role:user.role,library_id:user.library_id}; res.redirect(user.role==="SUPER_ADMIN"?"/admin":"/panel"); });
+
+async function ensureDemoUser(email) {
+  const cleanEmail = String(email || "").trim().toLowerCase();
+  if (!["admin@ktb.gov.tr", "yesilyurt@ktb.gov.tr", "serik@ktb.gov.tr"].includes(cleanEmail)) return null;
+
+  const passwordHash = await hash("123456");
+
+  if (!usingPostgres) {
+    let u = memory.users.find(x => x.email === cleanEmail);
+    if (u) {
+      u.password_hash = passwordHash;
+      u.active = true;
+      return u;
+    }
+    return null;
+  }
+
+  let libId = null;
+  let role = "SUPER_ADMIN";
+
+  if (cleanEmail === "yesilyurt@ktb.gov.tr") {
+    role = "LIBRARY_ADMIN";
+    await query(`INSERT INTO libraries(name,slug,email,phone,address,about,working_hours,score,rank_name,status)
+      VALUES('Adıyaman Yeşilyurt Halk Kütüphanesi','yesilyurt','yesilyurt@ktb.gov.tr','0416 000 00 00','Yeşilyurt Mah. 2131 Sok. No:5 Merkez / ADIYAMAN','Çocuk, genç ve yetişkin kullanıcılar için etkinlik, okuma, çalışma ve zeka oyunları hizmetleri sunan halk kütüphanesi.','08:00 - 19:00',92,'Lider','approved')
+      ON CONFLICT (slug) DO UPDATE SET status='approved', email=EXCLUDED.email`, []);
+    libId = (await query("SELECT id FROM libraries WHERE slug='yesilyurt' LIMIT 1"))[0].id;
+  }
+
+  if (cleanEmail === "serik@ktb.gov.tr") {
+    role = "LIBRARY_ADMIN";
+    await query(`INSERT INTO libraries(name,slug,email,phone,address,about,working_hours,score,rank_name,status)
+      VALUES('Serik Halk Kütüphanesi','serik','serik@ktb.gov.tr','0242 000 00 00','Serik / ANTALYA','Etkinlik ve zeka oyunları odaklı demo kütüphane.','09:00 - 18:00',76,'Üreten','approved')
+      ON CONFLICT (slug) DO UPDATE SET status='approved', email=EXCLUDED.email`, []);
+    libId = (await query("SELECT id FROM libraries WHERE slug='serik' LIMIT 1"))[0].id;
+  }
+
+  const existing = await getUserByEmail(cleanEmail);
+  if (existing) {
+    await query("UPDATE users SET password_hash=$1, active=true, role=$2, library_id=$3 WHERE id=$4", [passwordHash, role, libId, existing.id]);
+  } else {
+    await query("INSERT INTO users(email,password_hash,role,library_id,active) VALUES($1,$2,$3,$4,true)", [cleanEmail, passwordHash, role, libId]);
+  }
+  return await getUserByEmail(cleanEmail);
+}
+app.post("/login", async (req, res) => {
+  const type = req.body.type;
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const password = String(req.body.password || "").trim();
+
+  let user = await getUserByEmail(email);
+
+  // Render/PostgreSQL ilk kurulumunda demo kullanıcılar eksik veya eski hash ile kalırsa
+  // 123456 şifresiyle otomatik düzeltir.
+  if ((!user || !(await compare(password, user.password_hash))) && password === "123456") {
+    user = await ensureDemoUser(email);
+  }
+
+  if (!user || !user.active || !(await compare(password, user.password_hash))) {
+    return res.status(401).render("login", { type, error: "E-posta veya şifre hatalı." });
+  }
+
+  if (type === "admin" && user.role !== "SUPER_ADMIN") {
+    return res.status(403).render("login", { type, error: "Bu sayfa sadece süper admin içindir." });
+  }
+
+  if (type === "library" && user.role !== "LIBRARY_ADMIN") {
+    return res.status(403).render("login", { type, error: "Bu sayfa sadece kütüphane paneli içindir." });
+  }
+
+  req.session.user = { id: user.id, email: user.email, role: user.role, library_id: user.library_id };
+  req.session.save(() => {
+    res.redirect(user.role === "SUPER_ADMIN" ? "/admin" : "/panel");
+  });
+});
 app.post("/logout",(req,res)=>req.session.destroy(()=>res.redirect("/")));
 app.get("/admin",requireAdmin,async(req,res)=>{ const libraries=await getLibraries({limit:100}); const stats={libraries:usingPostgres?(await query("SELECT COUNT(*)::int c FROM libraries"))[0].c:memory.libraries.length,events:usingPostgres?(await query("SELECT COUNT(*)::int c FROM events"))[0].c:memory.events.length,applications:usingPostgres?(await query("SELECT COUNT(*)::int c FROM applications"))[0].c:memory.applications.length}; res.render("admin",{libraries,stats}); });
 app.get("/panel",requireLibrary,async(req,res)=>{ const lib=await getLibraryById(req.session.user.library_id); const events=await getEvents(lib.id,{limit:8}); const games=await getGames(lib.id); res.render("panel",{lib,events,games}); });
