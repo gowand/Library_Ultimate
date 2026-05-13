@@ -1,43 +1,27 @@
-# Dijital Kütüphane Enterprise Sürüm
-
-1000+ kütüphane ve her kütüphane için 1000+ etkinlik düşünülerek hazırlanmış PostgreSQL destekli sürümdür.
-
-## Yerelde çalıştırma
-
-```bash
-npm install
-node server.js
-```
-
-Adres:
-
-```text
-http://localhost:3000
-```
-
-## Demo girişler
-
-```text
-admin@ktb.gov.tr / 123456
-yesilyurt@ktb.gov.tr / 123456
-serik@ktb.gov.tr / 123456
-```
+# Dijital Kütüphane Enterprise V4
 
 ## Render
+- Web Service seç
+- Static Site seçme
+- Publish Directory boş
+- Build Command: `npm install`
+- Start Command: `npm start`
+- Environment:
+  - DATABASE_URL
+  - SESSION_SECRET
+  - NODE_ENV=production
 
-Servis tipi: Web Service
+## Girişler
+- admin@ktb.gov.tr / 123456
+- yesilyurt@ktb.gov.tr / 123456
+- serik@ktb.gov.tr / 123456
 
-```text
-Build Command: npm install
-Start Command: npm start
-```
-
-Environment Variables:
-
-```text
-DATABASE_URL=Render PostgreSQL Internal Database URL
-SESSION_SECRET=uzun-guvenli-bir-anahtar
-NODE_ENV=production
-```
-
-Not: DATABASE_URL boşsa sistem yerelde demo memory modunda çalışır. Gerçek kullanımda PostgreSQL zorunludur.
+## Özellikler
+- Kütüphane başvuru sayfası
+- Admin onay/red
+- Aktif admin panel menüleri
+- Aktif kütüphane panel menüleri
+- Logo/banner yükleme
+- Etkinlik afişi yükleme
+- Arşiv fotoğraf yükleme
+- PostgreSQL migration: mevcut veritabanını silmez
